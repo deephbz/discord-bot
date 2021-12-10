@@ -27,28 +27,12 @@ from discord import (
 )
 from discord.abc import GuildChannel
 
+from common import CachedGuild, BasicClient
+
 MY_TOKEN = open('token.txt', 'r').read()
 
 
-@dataclass
-class POAPClaimingClientConfig:
-    project_name_to_discord_username_to_url_json_paths: Dict[str, Path]
-
-
-class BasicClient(discord.Client):
-    def __init__(self):
-        super(BasicClient, self).__init__()
-
-    async def on_ready(self):
-        print("Connected!")
-        print("Username: {0.name}\nID: {0.id}".format(self.user))
-
-    async def on_message(self, msg):
-        """This callback is invoked EVERY TIME a member sends a message to this bot or in the server."""
-        print(msg)
-
-
-class GuildManager(ABC):
+class GuildManager(CachedGuild):
     GUILD = "Real-UnknownDAO"  # discord server name
     SHALL_DUMP_MEMBER_STAT: bool = False
 
@@ -57,38 +41,9 @@ class GuildManager(ABC):
         916524340835672095,  # ACAT
         916492369715666985,  # DAOer
     ]
-    # ROLE_PERM_SETTINGS = {
-    #         'builder': Permissions()
-    # }
-
-    def __init__(self):
-        super(GuildManager, self).__init__()
-        self.roles: List[Role] = []
-        self.members: List[Member] = []
-        self.channels: List[GuildChannel] = []
-
-    @abstractmethod
-    async def get_guilds(self) -> List[Guild]:
-        """"""
-
-    async def manage_guilds(self):
-        """Get list of members in the server. Then do custom statistics on it."""
-        guilds = await self.get_guilds()
-        for guild in guilds:
-            if guild.name != self.GUILD:
-                continue
-            await self.manage_guild(guild)
-
-    async def manage_guild(self, guild: Guild):
-        """Dump to dataframe for later data analysis"""
-        self.roles = await guild.fetch_roles()
-        await self.manage_roles(self.roles)
-
-        self.members = await guild.fetch_members(limit=3500).flatten()
-        await self.manage_members(self.members)
-
-        self.channels = await guild.fetch_channels()
-        await self.manage_channels(self.channels)
+    def __init__(self, dry_run: bool) -> None:
+        super().__init__()
+        self.dry_run = dry_run
 
     async def manage_members(self, members: List[Member]):
         print("Manage all members:")
@@ -103,7 +58,8 @@ class GuildManager(ABC):
                 print("=" * 20 + f"Category {c.name}" + "=" * 30)
             elif isinstance(c, (TextChannel, VoiceChannel)):
                 print(f"Channel {c.name}")
-                await self.set_channel_permission(c)
+                if not self.dry_run:
+                    await self.set_channel_permission(c)
             else:
                 print("=" * 20 + f"{type(c)} {c.name}" + "=" * 30)
 
@@ -127,7 +83,8 @@ class GuildManager(ABC):
             overwrite.manage_channels = False
             overwrite.manage_permissions = False
             overwrite.manage_threads = False
-            await c.set_permissions(role, overwrite=overwrite)
+            if not self.dry_run:
+                await c.set_permissions(role, overwrite=overwrite)
             print(f"overwrites_for {role.name}: ", bin(allow.value), bin(deny.value))
             print(
                 overwrite.manage_channels,
@@ -141,9 +98,9 @@ class GuildManagerClient(BasicClient, GuildManager):
         Permission management and Discord connection.
 
     """
-    def __init__(self, *args, **kwargs):
-        super(BasicClient, self).__init__(*args, **kwargs)
-        super(GuildManager, self).__init__()
+    def __init__(self, *args, dry_run: bool = True, **kwargs):
+        BasicClient.__init__(self, *args, **kwargs)
+        GuildManager.__init__(self, dry_run=dry_run)
 
     async def on_ready(self):
         await super(GuildManagerClient, self).on_ready()
@@ -164,7 +121,7 @@ def main():
 
     intents = discord.Intents.default()
     intents.members = True
-    client = GuildManagerClient(loop=client_loop, intents=intents)
+    client = GuildManagerClient(loop=client_loop, intents=intents, dry_run=True)
 
     client.run(MY_TOKEN)
 
