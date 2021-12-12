@@ -1,4 +1,6 @@
 """
+This module implements HistoricalMsgAnalysisClient which helps you to analyze historical messages (in order to to retroactive airdrops); and POAPDistributorClient, which helps you to distribute POAP claim codes (or anything else) to white-listed users.
+
 - Discord.py API Reference: https://discordpy.readthedocs.io/en/latest/api.html#
 - Get TOKEN of your bot: https://discord.com/developers/applications, select APP -> Bot -> reveal/create Token
 
