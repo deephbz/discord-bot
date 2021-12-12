@@ -37,13 +37,14 @@ class BasicClient(discord.Client):
 
     async def on_message(self, msg):
         """This callback is invoked EVERY TIME a member sends a message to this bot or in the server."""
-        print(msg)
+        pass
 
 
 class CachedGuild(ABC):
-
-    def __init__(self):
+    def __init__(self, target_guild_id: int):
         super().__init__()
+        self.target_guild_id = target_guild_id
+        self.guild: Optional[Guild] = None
         self.roles: List[Role] = []
         self.members: List[Member] = []
         self.channels: List[GuildChannel] = []
@@ -55,10 +56,15 @@ class CachedGuild(ABC):
     async def manage_guilds(self):
         """Get list of members in the server. Then do custom statistics on it."""
         guilds = await self.get_guilds()
+        assert self.target_guild_id, "self.target_guild_id not set!"
         for guild in guilds:
-            if guild.name != self.GUILD:
-                continue
-            await self.manage_guild(guild)
+            # if guild.name == self.target_guild_id:
+            if guild.id == self.target_guild_id:
+                self.guild = guild
+                await self.manage_guild(guild)
+                break
+        else:
+            raise ValueError(f"No {self.target_guild_id} found, available: {guilds}")
 
     async def manage_guild(self, guild: Guild):
         """Dump to dataframe for later data analysis"""
@@ -71,7 +77,12 @@ class CachedGuild(ABC):
         self.channels = await guild.fetch_channels()
         await self.manage_channels(self.channels)
 
+        await self.manage_members_post(self.members)
+
     async def manage_members(self, members: List[Member]):
+        pass
+
+    async def manage_members_post(self, members: List[Member]):
         pass
 
     async def manage_channels(self, channels: List[GuildChannel]):

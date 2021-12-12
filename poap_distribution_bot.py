@@ -8,15 +8,19 @@ import json
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
+import pickle
 from typing import Dict, List, Optional
 
 import discord
 import pandas as pd
-from discord import Guild
+from discord import Guild, Message, Member, TextChannel
 
-MY_TOKEN = ""
+from common import CachedGuild, BasicClient
+
+MY_TOKEN = open('token.txt', 'r').read()
 
 MEMBERS_TO_MENTION = ['some_discord_username#1234']  # hard-coded name list for convenience use
+ClaimableT = Dict[str, str]  # project name to claim code URL
 
 
 @dataclass
@@ -24,123 +28,119 @@ class POAPClaimingClientConfig:
     project_name_to_discord_username_to_url_json_paths: Dict[str, Path]
 
 
-class POAPClaimingClient(discord.Client):
+class POAPDistributor(CachedGuild):
+    """
+    - React to claim spells by PM claim code, then persist who has claimed using which code;
+    - Mention all whitelisted users.
+
+    """
+    GUILD = 916300758834630666  # "Real-UnknownDAO"  # discord server name
     poap_issue_claim_tutorial_link = "https://unknown-dao.notion.site/POAP-Issue-Claim-Tutorial-1b07698a43914229a228e9dfe7020990"
     CLAIM_MAGIC_SPELLS = [
-        "领取-我和我的领航猫-POAP",
-        #         'ClaimPOAP',
-        #         '拿来吧你',
-        #         '看蓝猫，学蓝猫，分享知识我自豪！',
-        #         'Here comes a honorable designer.'
+        'WhereIsMyPOAP',
     ]
     MEMBER_STAT_SPELL = "Check it out"
     ADMIN_DIS_NAME = "₿ingnan.ΞTH#0369"
-    GUILD = "Unknown DAO"  # discord server name
     SHALL_DUMP_MEMBER_STAT: bool = False
+
+    def __init__(self) -> None:
+        super().__init__(target_guild_id=self.GUILD)
+        self.cfg: Optional[POAPClaimingClientConfig] = None
+        self.project_name_to_name_url_map: POAP = {}
 
     def set_config(self, cfg: POAPClaimingClientConfig):
         """Custom configurations"""
         self.cfg = cfg
-        self.project_name_to_name_url_map = {}
         for (
             project_name,
             path,
         ) in self.cfg.project_name_to_discord_username_to_url_json_paths.items():
             self.project_name_to_name_url_map[project_name] = json.load(open(path, "r"))
-        self.my_cached_members = []
 
-    async def on_ready(self):
-        print("Connected!")
-        print("Username: {0.name}\nID: {0.id}".format(self.user))
-
-    async def on_message(self, msg):
+    async def on_message(self, msg: Message):
         """This callback is invoked EVERY TIME a member sends a message to this bot or in the server."""
         if any(msg.content.startswith(spell) for spell in self.CLAIM_MAGIC_SPELLS):
             await self._on_claim_poap(msg)
-        if str(msg.author) == self.ADMIN_DIS_NAME and msg.content.startswith(
-            self.MEMBER_STAT_SPELL
-        ):
+
+        if str(msg.author) == self.ADMIN_DIS_NAME and msg.content.startswith(self.MEMBER_STAT_SPELL):
             await self._on_member_stat(msg)
 
-    async def _on_member_stat(self, msg):
+    async def manage_members_post(self, members: List[Member]):
         """Get list of members in the server. Then do custom statistics on it."""
-        guilds = await self.fetch_guilds(limit=150).flatten()
-        for guild in guilds:
-            if guild.name != self.GUILD:
+        return
+        BOT_CID = 916538023909412916
+        channel = [c for c in self.channels if c.id == BOT_CID][0]
+        for project_name, id2url in self.project_name_to_name_url_map.items():
+            whitelisted_members = [
+                m for m in self.members
+                if (str(m.id) in id2url) or (str(m) in id2url)
+            ]
+            if not whitelisted_members:
+                print(f"No whitelisted_members for {project_name}")
                 continue
-            await self._stat_single_guild(guild)
-        self._send_msg_and_mention_target_members(
+            if project_name == 'WhatTheFork Event POAP':
+                continue
+            await self._mention_whitelist_members(
+                whitelisted_members, channel, project_name
+            )
+
+    async def _mention_whitelist_members(
+        self, members_to_mention: List[Member], channel: TextChannel, project_name: str,
+    ):
+        assert members_to_mention, "members_to_mention is empty!"
+        msg = "\n".join(
             [
-                m
-                for m in self.my_cached_members
-                #                               if str(m) in MEMBERS_TO_MENTION
-                if any(
-                    str(m).startswith(mention.split("#")[0])
-                    for mention in MEMBERS_TO_MENTION
-                )
+                "Hey~ ",
+                " ".join([m.mention for m in members_to_mention]),
+                f"You are in **whitelist** of {project_name}, send `{self.CLAIM_MAGIC_SPELLS[0]}` to claim here.",
+                "Ignore if you've already done it."
             ]
         )
+        await self.send_maybe_long_msg(msg, channel, delete_after=3600 * 8)  # delete the msg after 8 hours
 
-    async def _send_msg_and_mention_target_members(self, members_to_mention):
-        await msg.channel.send(
-            "\n".join(
-                [
-                    "Hey guys:",
-                    " ".join([m.mention for m in members_to_mention]),
-                    f"You are already added to **whitelist**, send `{self.CLAIM_MAGIC_SPELLS[0]}` to claim here.",
-                    "Ignore if you've already done it."
-                    #                 '最后一只未售出的AstroCat的免费获取资格，将于今晚从107位之前参与转发活动的人中抽取。让我们拭目以待欧皇的诞生！',
-                    #                 f'其中{len(members_to_mention)}人填写了discordID（没填写不影响抽奖）：艾特你们请保持关注 <#904708888404848720> 噢',
-                    #                 ' '.join([m.mention for m in members_to_mention]),
-                ]
-            ),
-            delete_after=3600 * 8,
-        )  # delete the msg after 8 hours
+    async def send_maybe_long_msg(self, msg: str, channel: TextChannel, *args, **kwargs) -> None:
+        MAX_LEN = 1950  # 4000 actually
+        chunk_idx = 0
+        while chunk_idx * MAX_LEN < len(msg):
+            msg_piece = msg[chunk_idx * MAX_LEN: (chunk_idx + 1) * MAX_LEN]
+            chunk_idx += 1
+            await channel.send(msg_piece, *args, **kwargs)  
 
-    async def _stat_single_guild(self, guild: Guild):
-        """Dump to dataframe for later data analysis"""
-        members = await guild.fetch_members(limit=1500).flatten()
-        print(f"{len(members)} members in {guild.name}!")
 
-        self.my_cached_members = members
-        if self.SHALL_DUMP_MEMBER_STAT:
-            dfs = []
-            for member in members:
-                dfs.append(
-                    {
-                        "name": str(member),
-                        "joined_at": member.joined_at,
-                        "created_at": member.created_at,
-                        "is_bot": member.bot,
-                    }
-                )
-            pd.DataFrame(dfs).to_parquet(f"member_stats.parquet")
-
-    async def _on_claim_poap(self, msg):
+    async def _on_claim_poap(self, msg: Message) -> None:
         """Check if a user is in white list and DM him URL if so."""
-        print(type(msg.author), repr(msg.author), str(msg.author))
-        print(msg.content)
-        author = str(msg.author)
+        poaps_to_claim = await self._get_poaps_to_claim(msg.author)
+        if not poaps_to_claim:
+            await msg.channel.send(
+                f"😑 **{msg.author}** is not a valid user to claim.", delete_after=3600 * 24
+            )
+        else:
+            await msg.author.send(self._format_private_msg(poaps_to_claim))
+            await msg.channel.send(
+                f"👍 Succeeded. **{msg.author}** please check your DM :)", delete_after=60
+            )
+            self.persist(poaps_to_claim)
+
+    async def _get_poaps_to_claim(self, m: Member) -> ClaimableT:
         project_name_to_urls = {}
         for (
             project_name,
             discord_users_to_claim_url_map,
         ) in self.project_name_to_name_url_map.items():
-            url = discord_users_to_claim_url_map.get(author, "")
+            url = ''
+            if str(m.id) in discord_users_to_claim_url_map:
+                url = discord_users_to_claim_url_map[str(m.id)]
+            elif str(m) in discord_users_to_claim_url_map:
+                url = discord_users_to_claim_url_map[str(m)]
+
             if url:
                 project_name_to_urls[project_name] = url
+        return project_name_to_urls
 
-        if project_name_to_urls:
-            await msg.author.send(self._format_private_msg(project_name_to_urls))
-            await msg.channel.send(
-                f"👍 Succeeded. **{author}** please check your DM :)", delete_after=60
-            )
-        else:
-            await msg.channel.send(
-                f"😑 **{author}** is not a valid user to claim.", delete_after=3600 * 24
-            )
+    def persist(self, project_name_to_poap_url: ClaimableT) -> str:
+        pass
 
-    def _format_private_msg(self, project_name_to_poap_url: Dict[str, str]) -> str:
+    def _format_private_msg(self, project_name_to_poap_url: ClaimableT) -> str:
         return "\n".join(
             [
                 f"Click URLs to claim your POAP."
@@ -160,34 +160,125 @@ class POAPClaimingClient(discord.Client):
 #         await message.channel.send(fmt.format(message))
 
 
+class HistoricalMsgProcessor(CachedGuild):
+    target_channel_id = 916306940517285939  # 🚀│频道建设讨论
+    output_dir = Path('historical_msgs')
+
+    async def manage_guild(self, guild: Guild):
+        await super().manage_guild(guild)
+
+        for c in self.channels:
+            # channel = guild.get_channel(self.target_channel_id)
+            if c.id == self.target_channel_id:
+                channel = c
+
+            if not isinstance(c, TextChannel):
+                continue
+            # await self.dump_channel_history(c)
+
+
+    async def dump_channel_history(self, c: TextChannel):
+        msgs: List[Message] = []
+        async for m in c.history(limit=5000):
+            # msgs.append(m)
+            msgs.append({
+                'channel': m.channel.name,
+                'channel_id': m.channel.id,
+                'content': m.content,
+                'created_at': m.created_at,
+                'author': m.author.name,
+                'author_dis': m.author.discriminator,
+                'author_id': m.author.id,
+            })
+        _out_fp = self.output_dir / str(c.id)
+        pd.DataFrame(msgs).to_parquet(_out_fp)
+        print(f'Dumped {c.name} to {_out_fp}')
+
+    async def manage_members(self, members: List[Member]):
+        dfs = []
+        for m in members:
+            dfs.append({
+                'member': m.name,
+                'member_dis': m.discriminator,
+                'member_id': m.id,
+                'joined_at': m.joined_at,
+                'created_at': m.created_at,
+                'is_bot': m.bot,
+            })
+        _out_fp = self.output_dir / 'members.parquet'
+        pd.DataFrame(dfs).to_parquet(_out_fp)
+        print(f'dumped to {_out_fp}')
+
+
+class HistoricalMsgAnalysisClient(BasicClient, HistoricalMsgProcessor):
+    """Multi-inhert from BasicClient and GuildManager to separate concerns: 
+        Permission management and Discord connection.
+
+    """
+    GUILD = 916300758834630666  # "Real-UnknownDAO"  # discord server name
+    def __init__(self, *args, dry_run: bool = True, **kwargs):
+        BasicClient.__init__(self, *args, **kwargs)
+        HistoricalMsgProcessor.__init__(self, self.GUILD)
+
+    async def on_ready(self):
+        await BasicClient.on_ready(self)
+        await self.manage_guilds()
+
+    async def get_guilds(self) -> List[Guild]:
+        """"""
+        return await self.fetch_guilds(limit=150).flatten()
+
+
+class POAPDistributorClient(BasicClient, POAPDistributor):
+    """Multi-inhert from BasicClient and GuildManager to separate concerns: 
+        Permission management and Discord connection.
+
+    """
+    def __init__(self, *args, dry_run: bool = True, **kwargs):
+        BasicClient.__init__(self, *args, **kwargs)
+        POAPDistributor.__init__(self)
+
+    async def on_ready(self):
+        await BasicClient.on_ready(self)
+        await self.manage_guilds()
+
+    async def get_guilds(self) -> List[Guild]:
+        """"""
+        return await self.fetch_guilds(limit=150).flatten()
+
+    async def on_message(self, msg):
+        await BasicClient.on_message(self, msg)
+        await POAPDistributor.on_message(self, msg)
+
+
 def main():
-    intents = discord.Intents.default()
-    intents.members = True
-    '''POAPClaimingClientConfig is a dict of event_name (str) -> JSON filepath,
-           each JSON is a dict from Discord user name (str) -> POAP claim link (str)
-    '''
-    config = POAPClaimingClientConfig(
-        {
-            #             '2021-10-18&23 NFT Workshop': r'C:\Users\admin\Pictures\POAPs\UnknownDAO 2021-10-23 NFT Workshop\discord_users_to_claim_url_map_T=2021-10-26 22:29.json',
-            #             'Designer Badges': r'C:\Users\admin\Pictures\POAPs\UnknownDAO Designer Workshop #1 POAP Badges\discord_users_to_claim_url_map_T=2021-10-25 19:51.json',
-            "我和我的领航猫": r"C:\Users\admin\Pictures\POAPs\我和我的领航猫\discord_users_to_claim_url_map_T=2021-11-07 22:08.json"
-        }
-    )
     loop = asyncio.get_event_loop()
     if loop.is_running():  # in notebook
         client_loop = loop
         print(client_loop)
     else:
         client_loop = None
-    client = POAPClaimingClient(loop=client_loop, intents=intents)
-    client.set_config(config)
-    print(
-        "Ask users to send following commands: ",
-        ", ".join([f"`{s}`" for s in client.CLAIM_MAGIC_SPELLS]),
+
+    intents = discord.Intents.default()
+    intents.members = True
+    client = POAPDistributorClient(loop=client_loop, intents=intents)
+
+    '''POAPClaimingClientConfig is a dict of event_name (str) -> JSON filepath,
+           each JSON is a dict from Discord user name (str) -> POAP claim link (str)
+    '''
+    poap_config = POAPClaimingClientConfig(
+        project_name_to_discord_username_to_url_json_paths={
+            'WhatTheFork Event POAP': r'C:\Users\admin\Pictures\POAPs\WhatTheFork\discord_users_to_claim_url_map_T=2021-12-11 12:59.json',
+            '2021-11-27上海线下活动': r'C:\Users\admin\Pictures\POAPs\1127上海线下\discord_users_to_claim_url_map_T=2021-12-11 18:27.json',
+            '昆明线下活动': r'C:\Users\admin\Pictures\POAPs\昆明线下\discord_users_to_claim_url_map_T=2021-12-11 18:29.json',
+        }
     )
+    client = POAPDistributorClient(loop=client_loop, intents=intents)
+    client.set_config(poap_config)
+
+    # client = HistoricalMsgAnalysisClient(loop=client_loop, intents=intents)
+
     client.run(MY_TOKEN)
-    print("client.run finished")
-    # guilds is now a list of Guild...
 
 
 if __name__ == "__main__":

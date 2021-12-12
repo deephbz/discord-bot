@@ -42,7 +42,7 @@ class GuildManager(CachedGuild):
         916492369715666985,  # DAOer
     ]
     def __init__(self, dry_run: bool) -> None:
-        super().__init__()
+        super().__init__(target_guild_name=self.GUILD)
         self.dry_run = dry_run
 
     async def manage_members(self, members: List[Member]):
