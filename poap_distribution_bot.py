@@ -11,15 +11,16 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 import pickle
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 
 import discord
 import pandas as pd
-from discord import Guild, Message, Member, TextChannel
+from discord import Guild, Message, Member, TextChannel, Thread
 
 from common import CachedGuild, BasicClient
 
 MY_TOKEN = open('token.txt', 'r').read()
+#MY_TOKEN = open('user_token.txt', 'r').read()
 
 MEMBERS_TO_MENTION = ['some_discord_username#1234']  # hard-coded name list for convenience use
 ClaimableT = Dict[str, str]  # project name to claim code URL
@@ -69,7 +70,6 @@ class POAPDistributor(CachedGuild):
 
     async def manage_members_post(self, members: List[Member]):
         """Get list of members in the server. Then do custom statistics on it."""
-        return
         BOT_CID = 916538023909412916
         channel = [c for c in self.channels if c.id == BOT_CID][0]
         for project_name, id2url in self.project_name_to_name_url_map.items():
@@ -80,8 +80,9 @@ class POAPDistributor(CachedGuild):
             if not whitelisted_members:
                 print(f"No whitelisted_members for {project_name}")
                 continue
-            if project_name == 'WhatTheFork Event POAP':
+            if project_name != '你到底卖不卖':
                 continue
+            continue
             await self._mention_whitelist_members(
                 whitelisted_members, channel, project_name
             )
@@ -145,9 +146,9 @@ class POAPDistributor(CachedGuild):
     def _format_private_msg(self, project_name_to_poap_url: ClaimableT) -> str:
         return "\n".join(
             [
-                f"Click URLs to claim your POAP."
+                f"Click URLs to claim your POAP.",
                 f"(If you are not familiar with it, please refer to <POAP Issue & Claim Tutorial> at {self.poap_issue_claim_tutorial_link})",
-                "; ".join(
+                "; \n".join(
                     [
                         f"**{project_name}**: {url}"
                         for project_name, url in project_name_to_poap_url.items()
@@ -163,23 +164,41 @@ class POAPDistributor(CachedGuild):
 
 
 class HistoricalMsgProcessor(CachedGuild):
-    target_channel_id = 916306940517285939  # 🚀│频道建设讨论
+    # target_channel_id = 916306940517285939  # 🚀│频道建设讨论
     output_dir = Path('historical_msgs')
+    # output_dir = Path('historical_msgs_old_ud')
 
     async def manage_guild(self, guild: Guild):
+        print('Dump history of ', guild.name)
         await super().manage_guild(guild)
 
         for c in self.channels:
-            # channel = guild.get_channel(self.target_channel_id)
-            if c.id == self.target_channel_id:
-                channel = c
+            # if c.id == self.target_channel_id:
+            #     channel = c
 
             if not isinstance(c, TextChannel):
+                print('Skip dump of ', type(c), c.name)
                 continue
-            # await self.dump_channel_history(c)
+
+            archived_threads = await c.archived_threads()
+            for thread in archived_threads:
+                await self.dump_channel_history(thread)
+
+            try:
+                # await self.dump_channel_history(c)
+                pass
+            except discord.errors.Forbidden:
+                print("Failed to dump {c.name}")
+                continue
 
 
-    async def dump_channel_history(self, c: TextChannel):
+        self.active_threads = await guild.active_threads()
+        for thread in self.active_threads:
+            await self.dump_channel_history(thread)
+
+
+
+    async def dump_channel_history(self, c: Union[TextChannel, Thread]):
         msgs: List[Message] = []
         async for m in c.history(limit=5000):
             # msgs.append(m)
@@ -218,6 +237,7 @@ class HistoricalMsgAnalysisClient(BasicClient, HistoricalMsgProcessor):
 
     """
     GUILD = 916300758834630666  # "Real-UnknownDAO"  # discord server name
+    # GUILD = 887031170079023115  # "Unknown DAO"  # discord server name
     def __init__(self, *args, dry_run: bool = True, **kwargs):
         BasicClient.__init__(self, *args, **kwargs)
         HistoricalMsgProcessor.__init__(self, self.GUILD)
@@ -271,6 +291,7 @@ def main():
     poap_config = POAPClaimingClientConfig(
         project_name_to_discord_username_to_url_json_paths={
             'WhatTheFork Event POAP': r'C:\Users\admin\Pictures\POAPs\WhatTheFork\discord_users_to_claim_url_map_T=2021-12-11 12:59.json',
+            '你到底卖不卖': r'C:\Users\admin\Pictures\POAPs\你到底卖不卖\discord_users_to_claim_url_map_T=2021-12-16 20:42.json',
             '2021-11-27上海线下活动': r'C:\Users\admin\Pictures\POAPs\1127上海线下\discord_users_to_claim_url_map_T=2021-12-11 18:27.json',
             '昆明线下活动': r'C:\Users\admin\Pictures\POAPs\昆明线下\discord_users_to_claim_url_map_T=2021-12-11 18:29.json',
         }

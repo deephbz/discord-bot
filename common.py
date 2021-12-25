@@ -71,7 +71,11 @@ class CachedGuild(ABC):
         self.roles = await guild.fetch_roles()
         await self.manage_roles(self.roles)
 
-        self.members = await guild.fetch_members(limit=3500).flatten()
+        try:
+            self.members = await guild.fetch_members(limit=3500).flatten()
+        except discord.errors.Forbidden as e:
+            print(e)
+            self.members = []
         await self.manage_members(self.members)
 
         self.channels = await guild.fetch_channels()
